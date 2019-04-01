@@ -1,0 +1,380 @@
+---
+title: "613 Final project"
+output: pdf_document
+---
+```{r}
+#*** LOAD DATA***
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance')
+data <- read.csv('train.csv')
+head(data)
+data = data[,2:132]
+# By visualizing, we learn that the column 1-116 are categorical and contains alphabets
+```
+
+```{r}
+#*** Checking the Data***
+# Missing value
+sapply(data, function(x) sum(is.na(x))) # No missing values
+
+# Ouliers - only for continuous variable!
+cont_cols = grep('cont', names(data))
+summary(data[,cont_cols]) # since all the values are scaled and are 
+                          # between 0-1, it can be said there are no outliers
+```
+
+```{r}
+#*** EDA ***
+dim(data)
+str(data)
+# Separate categorical and continuous features
+col_names = colnames(data)
+X_cont = data[,117:130]
+X_cat = data[,1:116]
+loss = data[,131]
+
+# summary of continuous
+summary(X_cont) # all the cont vars are scaled 0-1
+summary(loss) # max is 121012 
+
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+jpeg('Loss distribution.jpeg')
+par(mfrow=c(1,2))
+hist(loss) # Heavily right skewed - Log transform
+hist(log(loss+1)) # Approx normal
+dev.off()
+```
+
+```{r}
+#***Continuous***
+#Plots 1
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+n = dim(data)[1]
+p_cont = dim(X_cont)[2]
+for (i in 1:p_cont){
+  variable = col_names[116+i]
+  file_name = paste(variable, "info.jpeg")
+  jpeg(file_name)
+  # since the max loss is 121012 and right skewed, plot against log
+  layout(matrix(c(1,1,2,3), 2,2, byrow = T))
+  
+  plot(X_cont[,i], log(loss),
+       xlab =variable, ylab = 'Loss',
+       main = paste('Scatter plot of',variable,'against Loss'))
+       
+  hist(X_cont[,i], xlab=variable, col='grey', main='Histogram')
+  print(i)
+  boxplot(X_cont[,i], col = 'orange', main='Boxplot')
+  dev.off()
+}
+
+
+# Plots2
+new_df = data[,117:131]
+cont_cols_ = colnames(X_cont)
+cor_with_resp = cor(new_df, method = 'pearson')
+jpeg('Corr Response with Preds.jpeg')
+barplot(cor_with_resp[1:14,15], horiz = T, 
+        names.arg = cont_cols_, las = 1,
+        main = 'Correlation of Response with predictors')
+
+dev.off()
+#install.packages('plotly')
+# library(plotly)
+# plot_ly(x = cor_with_resp[1:14,15], y = cont_cols_,type='bar',
+#         orientation = 'h', color = 'orange')
+
+
+# plots 3 
+#install.packages('corrplot')
+library(corrplot)
+correlation_in_x_cont = cor(X_cont, method = 'pearson')
+jpeg('Correlation heatmap.jpeg')
+corrplot.mixed(correlation_in_x_cont, upper = 'square',
+               lower.col = "black", number.cex = .7, 
+               main='Correlation matrix')
+dev.off()
+# plot 2.1 & correlation analysis of predictors/redundant varible identification
+# Correlation > 0.5 for the following varibales:
+# (Cont1, cont6), (cont1, cont9), (cont1, cont10),(cont1, cont11), (cont1, cont12), (cont1, cont13)
+# (cont4,cont8)
+# (cont6, cont7), (cont6, cont9), (cont6, cont10), (cont6, cont11), (cont6, cont12)
+# (cont7, cont 11), (cont7, cont12)
+# (cont9, cont10), (cont9, cont11), (cont9, cont12), (cont9,cont13)
+# (cont10, cont11), (cont10, cont12), (cont10, cont13)
+# (cont11,cont12)
+
+```
+
+```{r}
+# Since there are correlations, let's find out PCs
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+PCs=princomp(X_cont, scale = T)
+PC_1 = PCs$scores[,1]
+PC_2 = PCs$scores[,2]
+names(PCs) # "sdev"     "loadings" "center"   "scale"    "n.obs"   "scores"   "call"
+pCs_var=PCs$sdev^2 
+jpeg('Principal Component Analysis.jpeg')
+par(mfrow=c(2,1))
+plot(pCs_var, type='l', col = 'red', main='Scree Plot', 
+     xlab = 'Number of Principle Components',
+     ylab = 'Variance explained')
+plot(PC_1, PC_2, xlab = 'Principle comp 1', ylab = 'Principle comp 2')
+dev.off()
+X_cont_pca = as.data.frame(PCs$scores[,1:2]
+                           )
+colnames(X_cont_pca)= c('Cont_PC_1', 'Cont_PC_2')
+
+# Let's look at some clusters
+min_cluster = 2
+max_cluster = 10
+clusters = matrix(NA, nrow = n, 
+                  ncol = 9) # 9 = max-min+1
+ratio = rep(NA, 9)
+for (i in min_cluster:max_cluster){
+  clust = kmeans(X_cont,i)
+  ratio[i-1] = clust$tot.withinss/clust$totss
+  clusters[,i-1] = clust$cluster
+}
+par(mfrow=c(1,1))
+jpeg('Clusters.jpeg')
+layout(matrix(c(1,1,1,2,3,4,5,6,7,8,9,10), 4,3, byrow = T))
+plot(c(2:10), ratio, type = 'l', col = 'blue', 
+     xlab = 'Number of clusters', 
+     ylab='Within cluster distance/Total distance',
+     ylim = c(0.4,.8))
+for (i in 1:9){
+  plot(PC_1, PC_2, col = clusters[,i],
+       xlab = '', ylab = '')
+  print(i)
+}
+mtext('Clusters using 2 PCs', line = -50, outer = TRUE)
+dev.off()
+```
+
+```{r}
+#***categorical***
+# plot 4
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+library(ggplot2)
+library(reshape2)
+
+cat_cols = colnames(X_cat)
+#X_cat_ggplot <- melt(X_cat, id.vars=cat_cols, variable.name="category")
+cat_plots <- function (varname, data){
+  file_name = paste(varname, 'Countplot.jpeg')
+  plot <- ggplot(data, aes_string(x = varname))+
+    geom_bar(width = .5)
+  ggsave(plot, filename = file_name)
+}
+
+for (i in cat_cols){
+  cat_plots(i, X_cat)
+}
+
+# DON'T RUN THE FOLLOWING CHUNK - TOO TIME CONSUMING
+# library(dummies)
+# X_cat_dumm = dummy.data.frame(X_cat)
+# correlation_in_x_cat = cor(X_cat_dumm, method = 'spearman')
+# jpeg('Cat-Correlation heatmap.jpeg')
+# corrplot.mixed(correlation_in_x_cat, upper = 'square',
+#                lower.col = "black", number.cex = .7, 
+#                main='Cat-Correlation (Spearman)')
+# dev.off()
+
+```
+
+```{r}
+#***Feature Segmentation of Categorical Variables***
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+# 1. only binary variables
+binary_cat <- X_cat[,1:72]
+binary_num_cat <- sapply(binary_cat, as.numeric)
+
+pca_binary <- prcomp(binary_num_cat, scale=F)
+pca_binary_var=pca_binary$sdev^2 
+jpeg('PCA of binary variables.jpeg')
+plot(cumsum(pca_binary_var), main = 'PCA of binary variables',
+     xlab = 'Number of components', ylab = 'Cumulative Variance')
+dev.off()
+Binary_vars = as.data.frame(pca_binary$x[,1:25]
+                            ) # from screeplot only 25 chosen
+colnames(Binary_vars)= c('Binary_PC_1', 
+            'Binary_PC_2',
+            'Binary_PC_3',
+            'Binary_PC_4',
+            'Binary_PC_5',
+            'Binary_PC_6',
+            'Binary_PC_7',
+            'Binary_PC_8',
+            'Binary_PC_9',
+            'Binary_PC_10',
+            'Binary_PC-11',
+            'Binary_PC_12',
+            'Binary_PC_13',
+            'Binary_PC_14',
+            'Binary_PC_15',
+            'Binary_PC_16',
+            'Binary_PC_17',
+            'Binary_PC_18',
+            'Binary_PC_19',
+            'Binary_PC_20',
+            'Binary_PC_21',
+            'Binary_PC_22',
+            'Binary_PC_23',
+            'Binary_PC_24',
+            'Binary_PC_25')
+# variables with 3-9 levels
+med_cat_vars = X_cat[,c(73:98, 102)]
+med_cat_num_vars = sapply(med_cat_vars, as.numeric)
+pca_med <- prcomp(med_cat_num_vars)
+pca_med_var=pca_med$sdev^2 
+jpeg('PCA of medium variables.jpeg')
+plot(cumsum(pca_med_var), main = 'PCA of medium variables',
+     xlab = 'Number of components', ylab = 'Cumulative Variance')
+dev.off()
+Med_vars = as.data.frame(pca_med$x[,1:15]) # from screeplot only 15 chosen
+colnames(Med_vars) = c('Med_PC_1',
+             'Med_PC_2',
+             'Med_PC_3',
+             'Med_PC_4',
+             'Med_PC_5',
+             'Med_PC_6',
+             'Med_PC_7',
+             'Med_PC_8',
+             'Med_PC_9',
+             'Med_PC_10',
+             'Med_PC_11',
+             'Med_PC_12',
+             'Med_PC_13',
+             'Med_PC_14',
+             'Med_PC_15')
+# variable with higher levels
+high_cat_vars = X_cat[,c(99:101, 103:116)]
+high_cat_num_vars = sapply(high_cat_vars, as.numeric)
+pca_high <- prcomp(high_cat_num_vars)
+pca_high_var=pca_high$sdev^2 
+jpeg('PCA of high variables.jpeg')
+plot(cumsum(pca_high_var), main = 'PCA of high variables',
+     xlab = 'Number of components', ylab = 'Cumulative Variance')
+dev.off()
+High_vars = as.data.frame(pca_med$x[,1:5]) # from screeplot only 5 chosen
+colnames(High_vars) = c('High_pca_1',
+                        'High_pca_2',
+                         'High_pca_3',
+                         'High_pca_4',
+                         'High_pca_5')
+X_cat_pca = cbind(Binary_vars, Med_vars, High_vars)
+
+```
+
+```{r}
+#***Data Transformation***
+
+#1. Response = Loss: Since it is already shown that it is right skewed (Poisson), 
+# we take log transofrmation (Poisson regression!)
+
+loss_trnsfrm = log(loss); hist(loss_trnsfrm, col='green', breaks = 50)
+
+#2. Cont_features: Let's calculate skewness
+setwd('C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/eda')
+install.packages('moments')
+library(moments)
+skew_cont = skewness(X_cont)
+names(skew_cont)
+pdf('Skewed Cont Vars.pdf')
+# layout(matrix(c(1:14), 7,2, byrow = T))
+par(mfrow=c(7,3),mar=c(3,3,3,3))
+for (i in names(skew_cont)){
+  hist(X_cont[,i], col = 'grey', main ='')
+  hist(log(X_cont[,i]), col = 'blue', 
+       main = paste('Distribution of',i))
+  hist(sqrt(X_cont[,i]), col = 'magenta', main ='')
+  mtext(i, line = .50, outer = TRUE)
+}
+dev.off()
+par(mfrow=c(1,1))
+
+```
+
+```{r}
+#***Implement Algorithms***
+
+# Linear regression
+data_ols = data[,-c(124:129)] # variable which are correlated
+lm_mod = lm(data_ols[,125]~., data_ols)
+y_hat = predict(lm_mod, data_ols)
+mean((data_ols[,131]-y_hat)^2)
+summary(lm_mod)
+par(mfrow=c(2,2))
+plot(lm_mod)
+dev.off()
+hist(lm_mod$residuals)
+resdul = lm_mod$residuals
+lm_mod$residuals(lm_mod$residuals <=-.1)
+sum(resdul <= -1e-13) #15441 values of residuals are less than -1e-13
+indx_res_outliers = which(resdul <= -1e-13)
+
+data_ols_1 = data_ols[-indx_res_outliers,]
+lm_mod_1 = lm(data_ols_1[,125]~., data_ols_1)
+y_hat = predict(lm_mod_1, data_ols_1)
+mean((data_ols_1[,125]-y_hat)^2)
+summary(lm_mod)
+par(mfrow=c(2,2))
+plot(lm_mod_1)
+dev.off()
+
+
+
+# PCA regression
+df_train = cbind(X_cont_pca, X_cat_pca,loss_trnsfrm)
+
+lm_poisson = lm(df_train[,48]~., df_train)
+summary(lm_poisson)
+par(mfrow=c(2,2))
+plot(lm_poisson)
+
+# df_train_1 = df_train[-c(44:144),]
+# lm_poisson_1 = lm(df_train_1[,48]~., df_train_1)
+# summary(lm_poisson_1)
+# par(mfrow=c(2,2))
+# plot(lm_poisson_1)
+
+cv_errors <- rep(NA, 10)
+n = dim(df_train)[1]
+for (i in 1:10){
+  test_indx = (floor(n/10))*(i-1)+c(1:(n/10))
+  test = df_train[test_indx,]
+  train = df_train[-test_indx,]
+  lm_mod = lm(train[,48]~., train)
+  y_hat = predict(lm_mod, test)
+  cv_errors[i] = mean((test[,48]-y_hat)^2)
+}
+plot(exp(cv_errors), ylim=c(0,2), type = 'l')
+
+
+
+# Ridge Regression
+x = model.matrix(df_train[,48]~.,df_train)[,-48]
+y = df_train[,48]
+
+library (glmnet) 
+grid=10^seq(10,-2, length =100) 
+ridge.mod=glmnet(x,y,alpha=0,lambda=grid)
+dim(coef(ridge.mod)) 
+
+set.seed(1) 
+train=sample (1: nrow(x), nrow(x)/2) 
+test=(-train) 
+y.test=y[test]
+ridge.mod=glmnet(x[train,],y[train],alpha=0,lambda=grid, thresh=1e-12) 
+
+# s= 0 ==> OLS 
+ridge.pred.ols=predict(ridge.mod,s=0,newx=x[test ,]) 
+mean((ridge.pred.ols -y.test)^2) # 0.0001759502 !!!
+# s = 4
+ridge.pred=predict(ridge.mod,s=4,newx=x[test ,]) 
+mean((ridge.pred -y.test)^2)  # 0.3812609
+# s = 10^10 ==> mean or x_bar
+ridge.pred=predict(ridge.mod,s=10^10,newx=x[test ,]) 
+mean((ridge.pred -y.test)^2) # 0.3812609
+```

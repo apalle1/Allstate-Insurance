@@ -1,0 +1,477 @@
+---
+title: "613project"
+output: pdf_document
+---
+```{r}
+# Setting up the working directory.
+setwd("C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance")
+
+# Load libraries
+library(ggplot2)
+library(dplyr)
+library(fastDummies)
+library(rlang)
+library(MASS)
+```
+
+```{r}
+train <- read.csv("C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/train.csv")
+
+# Classes of variables
+VarClass <- sapply(names(train), function(x){class(train[[x]])})
+
+VarClass[VarClass=="numeric"]
+# 15 columns including Loss column
+
+VarClass[VarClass %in% c("factor", "character")]
+# 116 columns  
+
+VarClass[VarClass=="integer"]
+# 1 column - ID
+```
+
+```{r}
+############################################################
+######################## EDA  #############################
+############################################################
+
+# Count loss when it is > 25000
+sum(train$loss>25000)
+# only 159 times
+# it is better to drop this data because these observations are < 1%
+# it would help in visualization
+
+train <- train[!(train$loss>25000),]
+
+# EDA on numeric columns on training data
+num_cols <- names(VarClass[VarClass=="numeric"])
+num_cols1 <- num_cols[1:14]
+
+num_train <- train[,num_cols]
+# 188159*15
+```
+
+```{r}
+## create scatter plot 
+setwd("C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/new_plots")
+
+for (i in 1:length(num_cols1))
+  { p <- ggplot(num_train, aes(x=get(num_cols1[i]), loss))+geom_point()+xlab(num_cols1[i])
+    ggsave(p, dpi = 300, filename = paste0(num_cols1[i], "_scatterplot.png"))
+  }
+
+## Create box plot of categorical variables
+cat_cols <- names(VarClass[VarClass %in% c("factor", "character")])
+cat_train <- cbind(train[,cat_cols], "loss" = train[,'loss'])
+
+
+setwd("C:/Users/abhishekreddy/Desktop/Learning Data/Self Learn Projects/Insurance/new_plots")
+
+for (i in 1:length(cat_cols))
+  {
+  p <- ggplot(cat_train, aes(x=get(cat_cols[i]), loss, fill="#FFCC00"))+geom_violin()+xlab(cat_cols[i])
+  
+  ggsave(p, dpi = 300, filename = paste0(cat_cols[i], "_boxplot.png"))
+  }
+```
+
+```{r}
+num_cats <- list()
+
+for (i in 1:(dim(cat_train)[2] -1))
+  {num_cats[i] <- length(unique(cat_train[,i]))}
+
+# To find number of categories
+unlist(num_cats)
+cat_cols1 <- cat_cols[which(unlist(num_cats) > 20)]
+
+# Drop these variables from train data
+cat_train2 <- cat_train[, !names(cat_train) %in% (cat_cols1)]
+
+# create dummy variable of categorical columns
+cat_train3 <- dummy_cols(cat_train2, remove_first_dummy = TRUE)
+cat_train4  <-  cat_train3[, 112:ncol(cat_train3)]
+
+# Merge num_train and cat_train3 columns
+data <- cbind(num_train, cat_train4)
+
+# sample train-test. 70-30 sampling
+index <- sample(1:nrow(data), size = 0.7*nrow(data)) 
+train_data <- data[index, ]
+test_data <- data[-index, ]
+
+#write.csv(train_data,row.names = FALSE, 'train_data.csv')
+# write.csv(test_data,row.names = FALSE, 'test_data.csv')
+
+# Load these files in case required
+#train_data <- read.csv("D:/Himanshu/Acads/03. Fall 2018 Sem/02. ISEN 613/Project/train_data.csv")
+#test_data <- read.csv("D:/Himanshu/Acads/03. Fall 2018 Sem/02. ISEN 613/Project/test_data.csv")
+#test <- read.csv("D:/Himanshu/Acads/03. Fall 2018 Sem/02. ISEN 613/Project/Data/test.csv")
+```
+
+```{r}
+# Run models -
+##############################################################
+##################1. Linear regression ####################### 
+##############################################################
+
+y_test <- test_data$loss
+x_test <- subset(test_data, select=-loss)
+
+lm.fit <- lm(loss~., data = train_data) # 51% Adj R-square
+pred_test <- predict(lm.fit, newdata = x_test)
+
+RMSE <- sqrt(mean((pred_test - y_test)^2)) #1907.679
+mae <- mean(abs(pred_test - y_test)) #1281.231
+
+############################################################
+###########stepwise Linear regression ###################### 
+############################################################
+
+# step.lm.fit <- stepAIC(lm.fit, direction = "both", 
+#                        trace = FALSE)
+# summary(step.lm.fit)
+```
+
+```{r}
+############################################################
+################ 2. Run Lasso regression ################### 
+############################################################
+
+library(glmnet)
+library(dplyr)
+
+y_train <- train_data$loss
+x_train <- as.matrix(subset(train_data, select=-loss))
+
+y_test <- test_data$loss
+x_test <- as.matrix(subset(test_data, select=-loss))
+
+
+cv_lasso <- cv.glmnet(x = x_train, y = y_train, alpha =1)
+cv_lasso$lambda.min
+# 2.20038
+
+lasso.fit <- glmnet(x = x_train, y = y_train, alpha = 1, lambda = cv_lasso$lambda.min)
+
+sum(lasso.fit$beta==0)
+# Around 83 variables had beta coefficients as zero.
+
+names(lasso.fit$beta[,1][order(lasso.fit$beta, decreasing = TRUE)[1:20]])
+# top 20 variables having highest coefficient
+# [1] "cat89_H"  "cat57_B"  "cat105_N" "cat75_C"  "cat102_G" "cat105_P" "cont7"    "cat105_O"
+# [9] "cat111_D" "cat105_L" "cat114_Q" "cat101_E" "cat79_D"  "cat114_V" "cont2"    "cat77_C" 
+# [17] "cat80_B"  "cat91_E"  "cat105_M" "cat105_J"
+
+pred_test <- predict(lasso.fit, newx = x_test, s = cv_lasso$lambda.min, type = "link")
+
+RMSE <- sqrt(mean((pred_test - y_test)^2))
+# RMSE - 1902.742
+```
+
+```{r}
+############################################################
+################ 2. Run Ridge regression ################### 
+############################################################
+
+
+grid=10^seq(10,-2, length =100) 
+x = model.matrix(train_data$loss~., train_data)
+y = train_data$loss
+
+ridge.mod=glmnet(x_train,y_train,alpha=0,lambda=grid)
+ridge_ols = glmnet(x_train,y_train,alpha=0,lambda=0)
+
+preds_ols_again = predict(ridge_ols, s=0, newx=x_test)
+sqrt(mean((preds_ols_again-test$loss)^2)) #1909.052
+
+```
+
+```{r}
+############################################################
+################ 3. Run Random forest ###################### 
+############################################################
+
+library(randomForest)
+
+list_mtry = c(19, 50, 100)
+
+mse = list()
+
+mae = list()
+
+for (i in 1:length(list_mtry)){ 
+  
+  rf.loss = randomForest(loss ~ ., data = train_data, 
+                         
+                         mtry = list_mtry[i], ntree = 150, importance = TRUE)
+  
+  pred.loss <- predict(rf.loss, newdata = X_test)
+  
+  mse[i] = mean((pred.loss - test_data$loss)^2)
+  
+  mae[i] = mean(abs(pred.loss - test_data$loss))
+  
+  print(mse[i])
+  
+  print(mae[i])
+  
+}
+```
+
+```{r}
+############################################################
+################ 4. Support vector machine ################# 
+############################################################
+library(e1071)
+
+radial_tune <- tune.svm(loss ~ ., data = train_data, kernel = "radial", cost = c(0.1,  1, 10), gamma = c(0.1, 1, 10))
+
+summary(radial_tune)
+
+#SVM Fit
+
+svm_radial <- svm(loss ~ ., data = train_data, kernel = "radial",
+                  
+                  cost = radial_tune$best.parameter$cost, gamma = radial_tune$best.parameter$gamma) 
+
+summary(svm_radial)
+
+train_pred <- predict(svm_radial, x_test)
+
+mse = mean((train_pred - test_data$loss)^2)
+
+mae = mean(abs(train_pred - test_data$loss))
+
+```
+
+```{r}
+############################################################
+################## 5. Run Gradient Boosting ################ 
+############################################################
+
+library(gbm)
+gbm_fit <- gbm(loss ~., data = train_data, distribution = 'gaussian',
+               n.trees = 200, interaction.depth = 4)
+pred_gbm <- predict(gbm_fit, newdata = x_test, n.trees = 200)
+rmse_gbm <- sqrt(mean((y_test-pred_gbm)^2))
+mae_gbm <- mean(abs(y_test-pred_gbm))
+
+metrics <- data.frame(matrix(nrow = 6, ncol = 4))
+colnames(metrics) <- c('trees', 'depth', 'mse', 'mae')
+
+conter = 1
+for (t in c(100,200,500)){
+  for (d in c(5,10,15)){
+    gbm_fit <- gbm(oss ~., data = train_data, distribution = 'gaussian',
+                   n.trees = t, interaction.depth = d)
+    pred_gbm <- predict(gbm_fit, newdata = x_test, n.trees = t)
+    rmse_gbm <- sqrt(mean((test[,15]-pred_gbm)^2))
+    mae_gbm <- mean(abs(test[,15]-pred_gbm))
+    metrics[conter,1] <- t
+    metrics[conter,2] <- d
+    metrics[conter,3] <- rmse_gbm
+    metrics[conter,4] <- mae_gbm
+    print(metrics[conter,])
+    conter = conter+1
+  }
+}
+```
+
+```{r}
+############################################################
+################## 6. Run XGBoost model #################### 
+############################################################
+
+library(xgboost)
+
+## first, with the original loss variable
+y_train <- train_data$loss
+x_train <- subset(train_data, select=-loss)
+
+y_test <- test_data$loss
+x_test <- subset(test_data, select=-loss)
+
+dtrain = xgb.DMatrix(data = as.matrix(x_train), label = y_train)
+dtest = xgb.DMatrix(data = as.matrix(x_test), label =y_test)
+
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.075,  
+               max_depth=6, 
+               nround = 250,
+               
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 5, 
+                 showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+Txgb <- xgb.train(params, dtrain, 250)
+
+pred_test <- predict(Txgb, newdata = dtest)
+
+RMSE <- sqrt(mean((pred_test - y_test)^2))
+
+mae <- mean(abs(pred_test - y_test))
+
+```
+
+```{r}
+### Kaggle Test data predictions ####
+# library(fastDummies)
+# library(rlang)
+# 
+# # drop columns from test data
+# test1 <- test[, !names(test) %in% (cat_cols1)]
+# 
+# test2 <- dummy_cols(test1)
+# test3 <- test2[, names(test2) %in% (names(x_test))]
+# 
+# cols1 <- names(x_test)[!names(x_test) %in% (names(test3))] # around 12 columns not present
+# 
+# test3[,cols1] <- 0
+# 
+# test4 <- test3[names(x_train)]
+# 
+# dtest_Kag = xgb.DMatrix(data = as.matrix(test4))
+# pred_test_kag <- predict(Txgb_log, newdata = dtest_Kag)
+# 
+# pred_test_kag2 <- cbind(test$id, pred_test_kag)
+# write.csv(pred_test_kag2, 'submission.csv', row.names = FALSE)
+# 
+# Kaggle score - 1173
+```
+
+```{r}
+#######################################################################
+############### Now XG boost model using log ##########################
+#######################################################################
+library(xgboost)
+
+y_train1 <- log(train_data$loss)
+x_train <- subset(train_data, select=-loss)
+
+y_test <- test_data$loss
+x_test <- subset(test_data, select=-loss)
+
+dtrain = xgb.DMatrix(data = as.matrix(x_train), label = y_train1)
+dtest = xgb.DMatrix(data = as.matrix(x_test), label =y_test)
+
+
+##  eta=0.075, max_depth=6 
+
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.075,  
+               max_depth=6, 
+               nround = 250,
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv_log <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 4,
+                 showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+
+Txgb_log <- xgb.train(params, dtrain, 250)
+
+pred_test <- predict(Txgb_log, newdata = dtest)
+
+print(RMSE <- sqrt(mean((exp(pred_test) - y_test)^2)))
+
+print(mae <- mean(abs(exp(pred_test) - y_test)))
+# 1139
+
+##  eta=0.075, max_depth=8, 
+
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.075,  
+               max_depth=8, 
+               nround = 250,
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv_log <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 4,
+                     showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+
+Txgb_log <- xgb.train(params, dtrain, 241)
+
+pred_test <- predict(Txgb_log, newdata = dtest)
+
+print(RMSE <- sqrt(mean((exp(pred_test) - y_test)^2)))
+
+print(mae <- mean(abs(exp(pred_test) - y_test)))
+# 1133.89
+
+
+##  eta=0.075, max_depth=10 
+
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.075,  
+               max_depth=10, 
+               nround = 250,
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv_log <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 4,
+                     showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+
+Txgb_log <- xgb.train(params, dtrain, 241)
+
+pred_test <- predict(Txgb_log, newdata = dtest)
+
+print(RMSE <- sqrt(mean((exp(pred_test) - y_test)^2)))
+
+print(mae <- mean(abs(exp(pred_test) - y_test)))
+
+Final_pred <- cbind(x_test, predict_loss = exp(pred_test))
+
+write.csv(Final_pred, 'Final_pred.csv')
+
+# choosing max_depth = 8 as best parameter.
+
+# try changing Learning rate
+##  max_depth=8, nrounds = 250 
+
+# eta = 0.1
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.1,  
+               max_depth=8, 
+               nround = 250,
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv_log <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 4,
+                     showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+
+Txgb_log <- xgb.train(params, dtrain, 250)
+
+pred_test <- predict(Txgb_log, newdata = dtest)
+
+print(RMSE <- sqrt(mean((exp(pred_test) - y_test)^2)))
+
+print(mae <- mean(abs(exp(pred_test) - y_test)))
+
+#####################################
+# eta = 0.05
+#####################################
+
+params <- list(booster = "gbtree", objective = "reg:linear", 
+               eta=0.05,  
+               max_depth=8, 
+               nround = 250,
+               min_child_weight=1, subsample=0.7, colsample_bytree=0.7 )
+
+xgbcv_log <- xgb.cv( params = params, nround = 250, data = dtrain, nfold = 4,
+                     showsd = T, stratified = T, print_every_n = 5, early_stopping_rounds = 5, maximize = F)
+
+
+Txgb_log <- xgb.train(params, dtrain, 250)
+
+pred_test <- predict(Txgb_log, newdata = dtest)
+
+print(RMSE <- sqrt(mean((exp(pred_test) - y_test)^2)))
+
+print(mae <- mean(abs(exp(pred_test) - y_test)))
+
+### eta 0.075 is the best
+## nrounds 250 gives better accuracy.
+
+```
+
